@@ -17,8 +17,11 @@ const ThreeScene = () => {
     mountRef.current.appendChild(renderer.domElement);
 
     const geometry = new THREE.BoxGeometry();
-    const material = new THREE.MeshBasicMaterial({ color: 0x00ff00 });
-    const cube = new THREE.Mesh(geometry, material);
+    // Base color used for all faces initially
+    const BASE_COLOR = new THREE.Color(0x00ff00);
+    // Create 6 materials (one per face) so we can recolor faces independently
+    const materials = Array.from({ length: 6 }, () => new THREE.MeshBasicMaterial({ color: BASE_COLOR.getHex() }));
+    const cube = new THREE.Mesh(geometry, materials);
     cube.scale.set(0.7, 0.7, 0.7); // Make the cube about 30% smaller
     scene.add(cube);
 
@@ -31,10 +34,101 @@ const ThreeScene = () => {
     line.scale.copy(cube.scale);
     scene.add(line);
 
-    let frameId;
+    // Click detection with raycaster
+    const raycaster = new THREE.Raycaster();
+    const mouse = new THREE.Vector2();
 
-    // Animation loop: auto-rotate the cube continuously (no user interaction)
+    // Simple per-face animation state machine
+    // Phases: 'idle' -> 'fadeIn'(0.2s) -> 'hold'(2s) -> 'fadeOut'(0.2s) -> 'idle'
+    const D_IN = 200;    // ms
+    const D_HOLD = 2000; // ms
+    const D_OUT = 200;   // ms
+
+    const faceStates = Array.from({ length: 6 }, () => ({
+      phase: 'idle',
+      start: 0,
+      from: new THREE.Color(BASE_COLOR),
+      to: new THREE.Color(BASE_COLOR),
+    }));
+
+    const GOLD = new THREE.Color(0xFFD700);
+    const GREY = new THREE.Color(0x808080);
+    const tmpColor = new THREE.Color(); // reused to avoid allocations
+
+    function triggerFaceAnimation(index, targetColor) {
+      if (index == null || !materials[index]) return;
+      const st = faceStates[index];
+      // Start fade-in from the current displayed color to the target color
+      st.from.copy(materials[index].color);
+      st.to.copy(targetColor);
+      st.phase = 'fadeIn';
+      st.start = performance.now();
+    }
+
+    function onClick(e) {
+      const rect = renderer.domElement.getBoundingClientRect();
+      mouse.x = ((e.clientX - rect.left) / rect.width) * 2 - 1;
+      mouse.y = -((e.clientY - rect.top) / rect.height) * 2 + 1;
+      raycaster.setFromCamera(mouse, camera);
+      const intersects = raycaster.intersectObject(cube, false);
+      if (intersects.length > 0) {
+        const hit = intersects[0];
+        const geom = cube.geometry;
+        const triIndex = hit.faceIndex != null ? hit.faceIndex * 3 : 0;
+        let faceMatIndex = 0;
+        if (geom.groups && geom.groups.length > 0) {
+          for (let i = 0; i < geom.groups.length; i++) {
+            const g = geom.groups[i];
+            if (triIndex >= g.start && triIndex < g.start + g.count) {
+              faceMatIndex = g.materialIndex;
+              break;
+            }
+          }
+        }
+        const win = Math.random() < 0.5;
+        triggerFaceAnimation(faceMatIndex, win ? GOLD : GREY);
+      }
+    }
+
+    renderer.domElement.addEventListener('click', onClick);
+
+    let frameId;
+    // Auto-rotate continuously; user cannot rotate it manually
     const animate = () => {
+      const now = performance.now();
+
+      // Update per-face color animations
+      for (let i = 0; i < faceStates.length; i++) {
+        const st = faceStates[i];
+        const mat = materials[i];
+        if (!mat) continue;
+
+        if (st.phase === 'fadeIn') {
+          const t = Math.min(1, (now - st.start) / D_IN);
+          tmpColor.copy(st.from).lerp(st.to, t);
+          mat.color.copy(tmpColor);
+          if (t >= 1) {
+            st.phase = 'hold';
+            st.start = now;
+          }
+        } else if (st.phase === 'hold') {
+          if (now - st.start >= D_HOLD) {
+            st.phase = 'fadeOut';
+            st.start = now;
+            st.from.copy(st.to);
+            st.to.copy(BASE_COLOR);
+          }
+        } else if (st.phase === 'fadeOut') {
+          const t = Math.min(1, (now - st.start) / D_OUT);
+          tmpColor.copy(st.from).lerp(st.to, t);
+          mat.color.copy(tmpColor);
+          if (t >= 1) {
+            st.phase = 'idle';
+            mat.color.copy(BASE_COLOR);
+          }
+        }
+      }
+
       cube.rotation.x += 0.01;
       cube.rotation.y += 0.01;
       line.rotation.copy(cube.rotation);
@@ -54,15 +148,16 @@ const ThreeScene = () => {
 
     return () => {
       cancelAnimationFrame(frameId);
+      renderer.domElement.removeEventListener('click', onClick);
       window.removeEventListener('resize', handleResize);
       renderer.dispose();
       if (mountRef.current && renderer.domElement.parentNode === mountRef.current) {
         mountRef.current.removeChild(renderer.domElement);
       }
-      // Clean up geometry and material
+      // Clean up geometry and materials
       geometry.dispose();
       edges.dispose();
-      material.dispose();
+      materials.forEach(m => m.dispose());
       line.material.dispose();
     };
   }, []);
