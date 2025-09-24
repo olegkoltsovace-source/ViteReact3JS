@@ -1,7 +1,7 @@
 import React, { useRef, useEffect } from 'react';
 import * as THREE from 'three';
 
-const ThreeScene = () => {
+const ThreeScene = ({ onOutcome }) => {
   const mountRef = useRef(null);
 
   useEffect(() => {
@@ -87,6 +87,9 @@ const ThreeScene = () => {
         }
         const win = Math.random() < 0.5;
         triggerFaceAnimation(faceMatIndex, win ? GOLD : GREY);
+        if (typeof onOutcome === 'function') {
+          onOutcome(win ? 'win' : 'lose');
+        }
       }
     }
 
@@ -129,8 +132,8 @@ const ThreeScene = () => {
         }
       }
 
-      cube.rotation.x += 0.01;
-      cube.rotation.y += 0.01;
+      cube.rotation.x += 0.0065;
+      cube.rotation.y += 0.0065;
       line.rotation.copy(cube.rotation);
       renderer.render(scene, camera);
       frameId = requestAnimationFrame(animate);
