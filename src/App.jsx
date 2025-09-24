@@ -18,7 +18,7 @@ const App = () => (
         pointerEvents: 'none',
       }}
     >
-      ThreeJS + React + Vite
+      Click to Win!
     </h1>
     <ThreeScene />
   </>
