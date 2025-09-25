@@ -1,6 +1,7 @@
 import React, { useState, useCallback } from 'react';
 import ThreeScene from './ThreeScene';
 import WinOrLose from './WinOrLose';
+import Header from './Header';
 
 const App = () => {
   const [outcome, setOutcome] = useState(null); // 'win' | 'lose' | null
@@ -14,23 +15,7 @@ const App = () => {
 
   return (
     <>
-      <h1
-        style={{
-          position: 'absolute',
-          zIndex: 1,
-          color: '#fff',
-          top: 20,
-          left: '50%',
-          transform: 'translateX(-50%)',
-          fontSize: '2.1rem',
-          margin: 0,
-          fontWeight: 700,
-          textAlign: 'center',
-          pointerEvents: 'none',
-        }}
-      >
-        Click!
-      </h1>
+      <Header />
       <WinOrLose outcome={outcome} />
       <ThreeScene onOutcome={handleOutcome} />
     </>
