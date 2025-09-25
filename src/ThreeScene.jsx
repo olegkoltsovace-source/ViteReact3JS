@@ -1,5 +1,8 @@
 import React, { useRef, useEffect } from 'react';
 import * as THREE from 'three';
+import { LineSegments2 } from 'three/examples/jsm/lines/LineSegments2.js';
+import { LineSegmentsGeometry } from 'three/examples/jsm/lines/LineSegmentsGeometry.js';
+import { LineMaterial } from 'three/examples/jsm/lines/LineMaterial.js';
 
 const ThreeScene = ({ onOutcome }) => {
   const mountRef = useRef(null);
@@ -18,21 +21,27 @@ const ThreeScene = ({ onOutcome }) => {
 
     const geometry = new THREE.BoxGeometry();
     // Base color used for all faces initially
-    const BASE_COLOR = new THREE.Color(0x00ff00);
+    const BASE_COLOR = new THREE.Color(0x000000);
     // Create 6 materials (one per face) so we can recolor faces independently
     const materials = Array.from({ length: 6 }, () => new THREE.MeshBasicMaterial({ color: BASE_COLOR.getHex() }));
     const cube = new THREE.Mesh(geometry, materials);
     cube.scale.set(0.7, 0.7, 0.7); // Make the cube about 30% smaller
     scene.add(cube);
 
-    // Add black wireframe borders as a separate object
-    const edges = new THREE.EdgesGeometry(geometry);
-    const line = new THREE.LineSegments(
-      edges,
-      new THREE.LineBasicMaterial({ color: 0x000000 })
-    );
-    line.scale.copy(cube.scale);
-    scene.add(line);
+    // Thicker golden borders using fat lines
+    const edgesGeom = new THREE.EdgesGeometry(geometry);
+    const fatEdgeGeo = new LineSegmentsGeometry();
+    fatEdgeGeo.setPositions(edgesGeom.attributes.position.array);
+    const fatEdgeMat = new LineMaterial({
+      color: 0xFFD700,
+      linewidth: 0.02, // world units thickness
+      worldUnits: true,
+    });
+    // If using pixel-based linewidth, keep resolution in sync
+    fatEdgeMat.resolution = new THREE.Vector2(width, height);
+    const fatEdges = new LineSegments2(fatEdgeGeo, fatEdgeMat);
+    fatEdges.scale.copy(cube.scale);
+    scene.add(fatEdges);
 
     // Click detection with raycaster
     const raycaster = new THREE.Raycaster();
@@ -52,7 +61,7 @@ const ThreeScene = ({ onOutcome }) => {
     }));
 
     const GOLD = new THREE.Color(0xFFD700);
-    const GREY = new THREE.Color(0x808080);
+    const RED = new THREE.Color(0xFF0000);
     const tmpColor = new THREE.Color(); // reused to avoid allocations
 
     function triggerFaceAnimation(index, targetColor) {
@@ -86,7 +95,7 @@ const ThreeScene = ({ onOutcome }) => {
           }
         }
         const win = Math.random() < 0.5;
-        triggerFaceAnimation(faceMatIndex, win ? GOLD : GREY);
+        triggerFaceAnimation(faceMatIndex, win ? GOLD : RED);
         if (typeof onOutcome === 'function') {
           onOutcome(win ? 'win' : 'lose');
         }
@@ -134,7 +143,7 @@ const ThreeScene = ({ onOutcome }) => {
 
       cube.rotation.x += 0.0065;
       cube.rotation.y += 0.0065;
-      line.rotation.copy(cube.rotation);
+      fatEdges.rotation.copy(cube.rotation);
       renderer.render(scene, camera);
       frameId = requestAnimationFrame(animate);
     };
@@ -146,6 +155,8 @@ const ThreeScene = ({ onOutcome }) => {
       camera.aspect = width / height;
       camera.updateProjectionMatrix();
       renderer.setSize(width, height);
+      // Keep fat line resolution in sync (useful if using pixel-based linewidth)
+      fatEdgeMat.resolution.set(width, height);
     };
     window.addEventListener('resize', handleResize);
 
@@ -159,9 +170,11 @@ const ThreeScene = ({ onOutcome }) => {
       }
       // Clean up geometry and materials
       geometry.dispose();
-      edges.dispose();
+      edgesGeom.dispose();
+      fatEdgeGeo.dispose();
+      fatEdgeMat.dispose();
       materials.forEach(m => m.dispose());
-      line.material.dispose();
+      // fatEdges is removed with scene teardown; material/geometry disposed above
     };
   }, []);
 
