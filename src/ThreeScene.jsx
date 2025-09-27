@@ -64,6 +64,15 @@ const ThreeScene = ({ onOutcome }) => {
     const RED = new THREE.Color(0xFF0000);
     const tmpColor = new THREE.Color(); // reused to avoid allocations
 
+    // Edge (border) color animation state (for lose -> red -> back to gold)
+    const EDGE_BASE = GOLD.clone();
+    const edgeState = {
+      phase: 'idle',
+      start: 0,
+      from: EDGE_BASE.clone(),
+      to: EDGE_BASE.clone(),
+    };
+
     function triggerFaceAnimation(index, targetColor) {
       if (index == null || !materials[index]) return;
       const st = faceStates[index];
@@ -96,6 +105,15 @@ const ThreeScene = ({ onOutcome }) => {
         }
         const win = Math.random() < 0.5;
         triggerFaceAnimation(faceMatIndex, win ? GOLD : RED);
+
+        // If lose, animate the cube borders to red then back to gold
+        if (!win) {
+          edgeState.from.copy(fatEdgeMat.color);
+          edgeState.to.copy(RED);
+          edgeState.phase = 'fadeIn';
+          edgeState.start = performance.now();
+        }
+
         if (typeof onOutcome === 'function') {
           onOutcome(win ? 'win' : 'lose');
         }
@@ -138,6 +156,32 @@ const ThreeScene = ({ onOutcome }) => {
             st.phase = 'idle';
             mat.color.copy(BASE_COLOR);
           }
+        }
+      }
+
+      // Update edge border color animations
+      if (edgeState.phase === 'fadeIn') {
+        const t = Math.min(1, (now - edgeState.start) / D_IN);
+        tmpColor.copy(edgeState.from).lerp(edgeState.to, t);
+        fatEdgeMat.color.copy(tmpColor);
+        if (t >= 1) {
+          edgeState.phase = 'hold';
+          edgeState.start = now;
+        }
+      } else if (edgeState.phase === 'hold') {
+        if (now - edgeState.start >= D_HOLD) {
+          edgeState.phase = 'fadeOut';
+          edgeState.start = now;
+          edgeState.from.copy(edgeState.to);
+          edgeState.to.copy(EDGE_BASE);
+        }
+      } else if (edgeState.phase === 'fadeOut') {
+        const t = Math.min(1, (now - edgeState.start) / D_OUT);
+        tmpColor.copy(edgeState.from).lerp(edgeState.to, t);
+        fatEdgeMat.color.copy(tmpColor);
+        if (t >= 1) {
+          edgeState.phase = 'idle';
+          fatEdgeMat.color.copy(EDGE_BASE);
         }
       }
 
