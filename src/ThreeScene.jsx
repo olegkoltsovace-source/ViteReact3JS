@@ -59,6 +59,113 @@ const ThreeScene = ({ onOutcome }) => {
     // Slightly up-scale edge object to sit just above faces to avoid gaps at grazing angles
     fatEdges.scale.set(1.005, 1.005, 1.005);
 
+    // Dice pips (white dots) added as sprites slightly above each face
+    function createPipTexture(size = 64) {
+      const canvas = document.createElement('canvas');
+      canvas.width = canvas.height = size;
+      const ctx = canvas.getContext('2d');
+      ctx.clearRect(0, 0, size, size);
+      ctx.fillStyle = 'white';
+      const r = size * 0.38; // solid circle with slight AA edge
+      ctx.beginPath();
+      ctx.arc(size/2, size/2, r, 0, Math.PI * 2);
+      ctx.closePath();
+      ctx.fill();
+      const tex = new THREE.CanvasTexture(canvas);
+      tex.needsUpdate = true;
+      tex.flipY = false;
+      return tex;
+    }
+
+    const pipTexture = createPipTexture(64);
+    const pipMaterial = new THREE.SpriteMaterial({ map: pipTexture, color: 0xffffff, transparent: true, depthWrite: false });
+    const pipsGroup = new THREE.Group();
+    cube.add(pipsGroup);
+
+    // Utility to add one pip as a flat disc (CircleGeometry) oriented to the face normal
+    function addPip(faceCenter, uDir, vDir, normal, ux, vy, size, zOffset = 0.002) {
+      // Shared geometry/material created after pipSize declaration
+      const mesh = new THREE.Mesh(pipGeo, pipMat);
+      // Scale disc to requested size relative to base pipSize
+      mesh.scale.set(size / pipSize, size / pipSize, 1);
+      const pos = new THREE.Vector3().copy(faceCenter)
+        .add(new THREE.Vector3().copy(uDir).multiplyScalar(ux))
+        .add(new THREE.Vector3().copy(vDir).multiplyScalar(vy))
+        .add(new THREE.Vector3().copy(normal).multiplyScalar(zOffset));
+      mesh.position.copy(pos);
+      // Orient disc so its +Z normal aligns with the face normal
+      const q = new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 0, 1), new THREE.Vector3().copy(normal).normalize());
+      mesh.quaternion.copy(q);
+      pipsGroup.add(mesh);
+    }
+
+    // Define face frames (center, u, v, normal) and dice values (opposites sum to 7)
+    const F = [
+      // +X (right) = 2
+      { c: new THREE.Vector3( 0.5, 0.0, 0.0), u: new THREE.Vector3( 0, 0,  1), v: new THREE.Vector3(0, 1, 0), n: new THREE.Vector3( 1, 0, 0), val: 2 },
+      // -X (left) = 5
+      { c: new THREE.Vector3(-0.5, 0.0, 0.0), u: new THREE.Vector3( 0, 0, -1), v: new THREE.Vector3(0, 1, 0), n: new THREE.Vector3(-1, 0, 0), val: 5 },
+      // +Y (top) = 3
+      { c: new THREE.Vector3( 0.0, 0.5, 0.0), u: new THREE.Vector3( 1, 0,  0), v: new THREE.Vector3(0, 0,-1), n: new THREE.Vector3( 0, 1, 0), val: 3 },
+      // -Y (bottom) = 4
+      { c: new THREE.Vector3( 0.0,-0.5, 0.0), u: new THREE.Vector3( 1, 0,  0), v: new THREE.Vector3(0, 0, 1), n: new THREE.Vector3( 0,-1, 0), val: 4 },
+      // +Z (front) = 1
+      { c: new THREE.Vector3( 0.0, 0.0, 0.5), u: new THREE.Vector3( 1, 0,  0), v: new THREE.Vector3(0, 1, 0), n: new THREE.Vector3( 0, 0, 1), val: 1 },
+      // -Z (back) = 6
+      { c: new THREE.Vector3( 0.0, 0.0,-0.5), u: new THREE.Vector3(-1, 0,  0), v: new THREE.Vector3(0, 1, 0), n: new THREE.Vector3( 0, 0,-1), val: 6 },
+    ];
+
+    // Pip layout within each face frame. s defines spacing, h used for six layout
+    const s = 0.22; // spacing (in local units, cube side=1)
+    const pipSize = 0.12; // sprite size in local units
+    // Shared flat disc geometry/material for pips (face-up in XY, normal +Z)
+    const pipGeo = new THREE.CircleGeometry(pipSize * 0.5, 32);
+    const pipMat = new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, depthWrite: false });
+
+    function placePips(frame) {
+      const { c, u, v, n, val } = frame;
+      const dot = (x, y) => addPip(c, u, v, n, x, y, pipSize);
+      switch (val) {
+        case 1:
+          dot(0, 0);
+          break;
+        case 2:
+          dot(-s, -s);
+          dot( s,  s);
+          break;
+        case 3:
+          dot(-s, -s);
+          dot( 0,  0);
+          dot( s,  s);
+          break;
+        case 4:
+          dot(-s, -s);
+          dot(-s,  s);
+          dot( s, -s);
+          dot( s,  s);
+          break;
+        case 5:
+          dot(-s, -s);
+          dot(-s,  s);
+          dot( 0,  0);
+          dot( s, -s);
+          dot( s,  s);
+          break;
+        case 6:
+          dot(-s, -s);
+          dot(-s,  0);
+          dot(-s,  s);
+          dot( s, -s);
+          dot( s,  0);
+          dot( s,  s);
+          break;
+        default:
+          break;
+      }
+    }
+
+    F.forEach(placePips);
+
     // Particle system (golden burst on win)
     const PARTICLE_COUNT = 300;
     const particleGeom = new THREE.BufferGeometry();
@@ -515,6 +622,10 @@ const ThreeScene = ({ onOutcome }) => {
       particleMat.dispose();
       glowTexture.dispose();
       glowMat.dispose();
+      pipTexture.dispose();
+      pipMaterial.dispose();
+      pipGeo.dispose();
+      pipMat.dispose();
       materials.forEach(m => m.dispose());
       // fatEdges is removed with scene teardown; material/geometry disposed above
     };
