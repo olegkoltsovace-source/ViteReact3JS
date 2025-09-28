@@ -78,6 +78,36 @@ const ThreeScene = ({ onOutcome }) => {
     particles.frustumCulled = false;
     container.add(particles);
     const velocities = new Float32Array(PARTICLE_COUNT * 3);
+
+    // Soft glow sprite (idle gold halo, expands on win/lose, red on lose)
+    function createGlowTexture(size = 128) {
+      const canvas = document.createElement('canvas');
+      canvas.width = canvas.height = size;
+      const ctx = canvas.getContext('2d');
+      const grd = ctx.createRadialGradient(size/2, size/2, 0, size/2, size/2, size/2);
+      grd.addColorStop(0, 'rgba(255,255,255,1)');
+      grd.addColorStop(0.6, 'rgba(255,255,255,0.25)');
+      grd.addColorStop(1, 'rgba(255,255,255,0)');
+      ctx.fillStyle = grd;
+      ctx.fillRect(0,0,size,size);
+      const tex = new THREE.CanvasTexture(canvas);
+      tex.flipY = false;
+      tex.needsUpdate = true;
+      return tex;
+    }
+    const glowTexture = createGlowTexture(128);
+    const glowMat = new THREE.SpriteMaterial({
+      map: glowTexture,
+      color: 0xFFD700,
+      transparent: true,
+      opacity: 0.35,
+      depthWrite: false,
+      depthTest: false,
+      blending: THREE.AdditiveBlending,
+    });
+    const glowSprite = new THREE.Sprite(glowMat);
+    glowSprite.renderOrder = 10;
+    container.add(glowSprite);
     let particlesActive = false;
     let particlesTL = null;
 
@@ -125,7 +155,7 @@ const ThreeScene = ({ onOutcome }) => {
     }
 
     // GSAP-based FX helpers and state (for win effects)
-    const fx = { yOffset: 0, xOffset: 0, rzOffset: 0, bgBoost: 0, bgCool: 0 };
+    const fx = { yOffset: 0, xOffset: 0, rzOffset: 0, bgBoost: 0, bgCool: 0, glowKick: 0, glowColorMix: 0 };
     const fxTimelines = [];
     let isBusy = false; // click lock while any animation/effect is active
     const nearZero = (v) => Math.abs(v) < 1e-3;
@@ -134,6 +164,8 @@ const ThreeScene = ({ onOutcome }) => {
       spawnParticles();
       const tl = gsap.timeline();
       fxTimelines.push(tl);
+      // Glow expansion kick
+      tl.to(fx, { glowKick: 1, duration: 0.40, yoyo: true, repeat: 1, ease: 'power2.out' }, 0);
       // Container bounce (additive to idle float via yOffset)
       tl.to(fx, { yOffset: 0.18, duration: 0.18, ease: 'power2.out' })
         .to(fx, { yOffset: 0, duration: 0.38, ease: 'bounce.out' }, '>-0.02');
@@ -152,6 +184,12 @@ const ThreeScene = ({ onOutcome }) => {
     function runLoseFX() {
       const tl = gsap.timeline();
       fxTimelines.push(tl);
+      const holdSec = (D_IN + D_HOLD + D_OUT) / 1000;
+      // Glow: turn red quickly, then revert after hold; expand and settle after hold
+      tl.to(fx, { glowColorMix: 1, duration: 0.06, ease: 'power1.inOut' }, 0)
+        .to(fx, { glowColorMix: 0, duration: 0.2, ease: 'power1.out' }, '>+' + holdSec);
+      tl.to(fx, { glowKick: 0.1, duration: 0.16, ease: 'power2.out' }, 0)
+        .to(fx, { glowKick: 0, duration: 0.35, ease: 'sine.out' }, '>+' + holdSec);
       // Jitter position X and rotation Z using offsets (so we don't fight the idle loop)
       tl.to(fx, { xOffset: 0.05, duration: 0.06, yoyo: true, repeat: 5, ease: 'sine.inOut' }, 0)
         .to(fx, { xOffset: 0, duration: 0.06, ease: 'sine.out' }, '>' );
@@ -326,6 +364,16 @@ const ThreeScene = ({ onOutcome }) => {
         rs.setProperty('--bg-alpha2', String(a2));
       }
 
+      // Update glow sprite (scale/opacity pulse in idle, expand on win/lose; red tint on lose)
+      {
+        const base = cube.scale.x * 2.0 * 1.45; // increased base size for more visible idle glow
+        const scale = base * (1.3 + 0.35 * p + 0.8 * fx.glowKick); // stronger idle breathing and win kick
+        glowSprite.scale.set(scale, scale, 1);
+        glowSprite.position.copy(cube.position);
+        glowMat.color.copy(GOLD).lerp(RED, fx.glowColorMix);
+        glowMat.opacity = Math.max(0, Math.min(1, 0.42 + 0.28 * p + 0.6 * fx.glowKick)); // brighter idle + stronger win
+      }
+
       // Update particle burst positions
       if (particlesActive) {
         const posAttr = particleGeom.attributes.position;
@@ -425,7 +473,7 @@ const ThreeScene = ({ onOutcome }) => {
       if (isBusy) {
         const facesIdle = faceStates.every(s => s.phase === 'idle');
         const edgesIdle = edgeState.phase === 'idle';
-        const fxIdle = fxTimelines.length === 0 && !particlesActive && nearZero(fx.xOffset) && nearZero(fx.rzOffset) && nearZero(fx.yOffset) && nearZero(fx.bgBoost) && nearZero(fx.bgCool);
+        const fxIdle = fxTimelines.length === 0 && !particlesActive && nearZero(fx.xOffset) && nearZero(fx.rzOffset) && nearZero(fx.yOffset) && nearZero(fx.bgBoost) && nearZero(fx.bgCool) && nearZero(fx.glowKick) && nearZero(fx.glowColorMix);
         if (facesIdle && edgesIdle && fxIdle) {
           isBusy = false;
         }
@@ -465,6 +513,8 @@ const ThreeScene = ({ onOutcome }) => {
       fatEdgeMat.dispose();
       particleGeom.dispose();
       particleMat.dispose();
+      glowTexture.dispose();
+      glowMat.dispose();
       materials.forEach(m => m.dispose());
       // fatEdges is removed with scene teardown; material/geometry disposed above
     };
