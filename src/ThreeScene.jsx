@@ -31,7 +31,7 @@ const ThreeScene = ({ onOutcome }) => {
     scene.add(container);
 
     const cube = new THREE.Mesh(geometry, materials);
-    cube.scale.set(0.7, 0.7, 0.7); // Make the cube about 30% smaller
+    cube.scale.set(0.6, 0.6, 0.6); // Make the cube about 40% smaller
     container.add(cube);
 
     // Thicker golden borders using fat lines
@@ -127,6 +127,8 @@ const ThreeScene = ({ onOutcome }) => {
     // GSAP-based FX helpers and state (for win effects)
     const fx = { yOffset: 0, xOffset: 0, rzOffset: 0, bgBoost: 0, bgCool: 0 };
     const fxTimelines = [];
+    let isBusy = false; // click lock while any animation/effect is active
+    const nearZero = (v) => Math.abs(v) < 1e-3;
 
     function runWinFX() {
       spawnParticles();
@@ -211,12 +213,18 @@ const ThreeScene = ({ onOutcome }) => {
     }
 
     function onClick(e) {
+      // Block clicks while animations/effects are active; only allow when fully idle
+      if (isBusy || edgeState.phase !== 'idle' || faceStates.some(s => s.phase !== 'idle') || fxTimelines.length > 0 || particlesActive) {
+        return;
+      }
       const rect = renderer.domElement.getBoundingClientRect();
       mouse.x = ((e.clientX - rect.left) / rect.width) * 2 - 1;
       mouse.y = -((e.clientY - rect.top) / rect.height) * 2 + 1;
       raycaster.setFromCamera(mouse, camera);
       const intersects = raycaster.intersectObject(cube, false);
       if (intersects.length > 0) {
+        // Lock input until all animations return to idle
+        isBusy = true;
         const hit = intersects[0];
         const geom = cube.geometry;
         const triIndex = hit.faceIndex != null ? hit.faceIndex * 3 : 0;
@@ -412,6 +420,17 @@ const ThreeScene = ({ onOutcome }) => {
       cube.rotation.x += 0.0065;
       cube.rotation.y += 0.0065;
       // fatEdges is a child of cube; transforms are inherited (no manual sync required)
+
+      // Auto-unlock when everything is idle/settled (faces, borders, fx, particles)
+      if (isBusy) {
+        const facesIdle = faceStates.every(s => s.phase === 'idle');
+        const edgesIdle = edgeState.phase === 'idle';
+        const fxIdle = fxTimelines.length === 0 && !particlesActive && nearZero(fx.xOffset) && nearZero(fx.rzOffset) && nearZero(fx.yOffset) && nearZero(fx.bgBoost) && nearZero(fx.bgCool);
+        if (facesIdle && edgesIdle && fxIdle) {
+          isBusy = false;
+        }
+      }
+
       renderer.render(scene, camera);
       frameId = requestAnimationFrame(animate);
     };
