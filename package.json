@@ -4,17 +4,19 @@
   "description": "This project is a starter template for building 3D web applications using React and Three.js.",
   "main": "index.js",
   "scripts": {
-  "start": "webpack serve --mode development --open",
-  "build": "webpack --mode production",
-  "vite": "vite",
-  "vite:build": "vite build",
-  "vite:preview": "vite preview",
+    "start": "webpack serve --mode development --open",
+    "build": "webpack --mode production",
+    "dev": "vite",
+    "vite": "vite",
+    "vite:build": "vite build",
+    "vite:preview": "vite preview",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "keywords": [],
   "author": "",
   "license": "ISC",
   "dependencies": {
+    "gsap": "^3.13.0",
     "react": "^19.1.1",
     "react-dom": "^19.1.1",
     "three": "^0.180.0"

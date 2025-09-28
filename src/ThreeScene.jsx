@@ -16,6 +16,7 @@ const ThreeScene = ({ onOutcome }) => {
     camera.position.z = 2;
 
     const renderer = new THREE.WebGLRenderer({ antialias: true });
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2)); // improve edge smoothness on HiDPI
     renderer.setSize(width, height);
     mountRef.current.appendChild(renderer.domElement);
 
@@ -24,9 +25,13 @@ const ThreeScene = ({ onOutcome }) => {
     const BASE_COLOR = new THREE.Color(0x000000);
     // Create 6 materials (one per face) so we can recolor faces independently
     const materials = Array.from({ length: 6 }, () => new THREE.MeshBasicMaterial({ color: BASE_COLOR.getHex() }));
+    // Container group to carry idle float + micro-rotation, keeping the cube geometry intact
+    const container = new THREE.Group();
+    scene.add(container);
+
     const cube = new THREE.Mesh(geometry, materials);
     cube.scale.set(0.7, 0.7, 0.7); // Make the cube about 30% smaller
-    scene.add(cube);
+    container.add(cube);
 
     // Thicker golden borders using fat lines
     const edgesGeom = new THREE.EdgesGeometry(geometry);
@@ -39,9 +44,19 @@ const ThreeScene = ({ onOutcome }) => {
     });
     // If using pixel-based linewidth, keep resolution in sync
     fatEdgeMat.resolution = new THREE.Vector2(width, height);
+    // Reduce z-fighting and improve smoothness at joins
+    fatEdgeMat.depthTest = true;
+    fatEdgeMat.depthWrite = false;
+    fatEdgeMat.polygonOffset = true;
+    fatEdgeMat.polygonOffsetFactor = -1;
+    fatEdgeMat.polygonOffsetUnits = 1;
+
     const fatEdges = new LineSegments2(fatEdgeGeo, fatEdgeMat);
-    fatEdges.scale.copy(cube.scale);
-    scene.add(fatEdges);
+    // Attach edges to the cube so they inherit position/rotation/scale automatically
+    // This avoids any drift between faces and borders.
+    cube.add(fatEdges);
+    // Slightly up-scale edge object to sit just above faces to avoid gaps at grazing angles
+    fatEdges.scale.set(1.005, 1.005, 1.005);
 
     // Click detection with raycaster
     const raycaster = new THREE.Raycaster();
@@ -56,6 +71,8 @@ const ThreeScene = ({ onOutcome }) => {
     const faceStates = Array.from({ length: 6 }, () => ({
       phase: 'idle',
       start: 0,
+      justEnteredIdle: false, // used to skip one frame of idle pulse to avoid flicker
+      idleMix: 1, // ramps from 0->1 when re-entering idle to avoid abrupt pulse
       from: new THREE.Color(BASE_COLOR),
       to: new THREE.Color(BASE_COLOR),
     }));
@@ -69,6 +86,8 @@ const ThreeScene = ({ onOutcome }) => {
     const edgeState = {
       phase: 'idle',
       start: 0,
+      justEnteredIdle: false, // skip one frame of idle pulse after returning to idle
+      idleMix: 1, // ramps from 0->1 when re-entering idle
       from: EDGE_BASE.clone(),
       to: EDGE_BASE.clone(),
     };
@@ -81,6 +100,7 @@ const ThreeScene = ({ onOutcome }) => {
       st.to.copy(targetColor);
       st.phase = 'fadeIn';
       st.start = performance.now();
+      st.idleMix = 0; // leave idle immediately for this face
     }
 
     function onClick(e) {
@@ -104,12 +124,18 @@ const ThreeScene = ({ onOutcome }) => {
           }
         }
         const win = Math.random() < 0.5;
-        triggerFaceAnimation(faceMatIndex, win ? GOLD : RED);
-
-        // If lose, animate the cube borders to red then back to gold
-        if (!win) {
+        if (win) {
+          // Win: only the clicked face flashes gold
+          triggerFaceAnimation(faceMatIndex, GOLD);
+        } else {
+          // Lose: all faces flash red, and borders animate to red
+          for (let i = 0; i < materials.length; i++) {
+            triggerFaceAnimation(i, RED);
+          }
           edgeState.from.copy(fatEdgeMat.color);
-          edgeState.to.copy(RED);
+          // During lose, make borders black while faces are red
+          edgeState.to.copy(BASE_COLOR);
+          edgeState.idleMix = 0; // leave idle; will ramp back when returning to idle
           edgeState.phase = 'fadeIn';
           edgeState.start = performance.now();
         }
@@ -122,10 +148,61 @@ const ThreeScene = ({ onOutcome }) => {
 
     renderer.domElement.addEventListener('click', onClick);
 
+    // Clock and idle animation configuration (no external libs)
+    const clock = new THREE.Clock();
+    const FLOAT_PERIOD = 4.0;     // seconds
+    const ROT_PERIOD = 6.0;       // seconds
+    const PULSE_PERIOD = 4.0;     // seconds
+
+    const FLOAT_AMPL = 0.12;      // world units
+    const ROT_AMPL = 0.20;        // radians
+
+    // Background breathing (see styles.css defaults)
+    const BG_ALPHA1_BASE = 0.22, BG_ALPHA1_DELTA = 0.08;
+    const BG_ALPHA2_BASE = 0.12, BG_ALPHA2_DELTA = 0.06;
+
+    // Idle face gold tint amounts
+    const IDLE_GLOW_MIN = 0.08, IDLE_GLOW_DELTA = 0.12;
+    const IDLE_FACE_RAMP = 0.18; // seconds to ramp idle face pulse back in
+    const EDGE_IDLE_RAMP = 0.18; // seconds to ramp idle edge pulse back in
+
     let frameId;
-    // Auto-rotate continuously; user cannot rotate it manually
+    let lastNow = performance.now();
+    // Main loop
     const animate = () => {
       const now = performance.now();
+      const dtSec = (now - lastNow) / 1000;
+      lastNow = now;
+
+      // Idle float + micro-rotation (applied to container so the cube stays intact)
+      const et = clock.getElapsedTime();
+      const floatY = Math.sin(et * (Math.PI * 2) / FLOAT_PERIOD) * FLOAT_AMPL;
+      const rotZ = Math.sin(et * (Math.PI * 2) / ROT_PERIOD) * ROT_AMPL;
+      container.position.y = floatY;
+      container.rotation.set(0, 0, rotZ);
+
+      // Shared pulse factor in [0,1] for edges + background
+      const p = 0.5 + 0.5 * Math.sin(et * (Math.PI * 2) / PULSE_PERIOD);
+
+      // Edge brightness pulse via HSL lightness modulation
+      // IMPORTANT: Only apply during idle. When edgeState is active (lose animation),
+      // the state machine below owns the edge color (e.g., fades to red and then back).
+      if (edgeState.phase === 'idle') {
+        // Ramp idle pulse back in after border animations, starting exactly from base gold
+        edgeState.idleMix = Math.min(1, edgeState.idleMix + dtSec / EDGE_IDLE_RAMP);
+        const base = { h: 0, s: 0, l: 0 };
+        EDGE_BASE.getHSL(base);
+        const deltaL = 0.12; // max added lightness when fully ramped and pulse at peak
+        const l = Math.min(1, Math.max(0, base.l + deltaL * p * edgeState.idleMix));
+        fatEdgeMat.color.setHSL(base.h, base.s, l);
+      }
+
+      // Background breathing via CSS variables
+      {
+        const rs = document.documentElement.style;
+        rs.setProperty('--bg-alpha1', String(BG_ALPHA1_BASE + BG_ALPHA1_DELTA * p));
+        rs.setProperty('--bg-alpha2', String(BG_ALPHA2_BASE + BG_ALPHA2_DELTA * p));
+      }
 
       // Update per-face color animations
       for (let i = 0; i < faceStates.length; i++) {
@@ -154,8 +231,15 @@ const ThreeScene = ({ onOutcome }) => {
           mat.color.copy(tmpColor);
           if (t >= 1) {
             st.phase = 'idle';
+            st.justEnteredIdle = true; // mark to skip idle pulse write this frame
             mat.color.copy(BASE_COLOR);
           }
+        } else if (st.phase === 'idle') {
+          // Ramp idle pulse back in to avoid flicker after click animations end.
+          st.idleMix = Math.min(1, st.idleMix + dtSec / IDLE_FACE_RAMP);
+          const blend = (IDLE_GLOW_MIN + IDLE_GLOW_DELTA * p) * st.idleMix;
+          tmpColor.copy(BASE_COLOR).lerp(GOLD, blend);
+          mat.color.copy(tmpColor);
         }
       }
 
@@ -181,13 +265,16 @@ const ThreeScene = ({ onOutcome }) => {
         fatEdgeMat.color.copy(tmpColor);
         if (t >= 1) {
           edgeState.phase = 'idle';
+          edgeState.justEnteredIdle = true; // skip pulsing this frame
           fatEdgeMat.color.copy(EDGE_BASE);
         }
       }
 
+      // Continuous rotation (as before) applied to the cube itself
+      // This stacks with the container's idle micro-rotation on Z
       cube.rotation.x += 0.0065;
       cube.rotation.y += 0.0065;
-      fatEdges.rotation.copy(cube.rotation);
+      // fatEdges is a child of cube; transforms are inherited (no manual sync required)
       renderer.render(scene, camera);
       frameId = requestAnimationFrame(animate);
     };
