@@ -62,7 +62,7 @@ const ThreeScene = ({ onOutcome }) => {
     // Particle system (golden burst on win)
     const PARTICLE_COUNT = 300;
     const particleGeom = new THREE.BufferGeometry();
-    const particlePositions = new Float32Array(PARTICLE_COUNT * 9);
+    const particlePositions = new Float32Array(PARTICLE_COUNT * 3);
     particleGeom.setAttribute('position', new THREE.BufferAttribute(particlePositions, 3));
     const particleMat = new THREE.PointsMaterial({
       color: 0xFFD700,
@@ -125,7 +125,7 @@ const ThreeScene = ({ onOutcome }) => {
     }
 
     // GSAP-based FX helpers and state (for win effects)
-    const fx = { yOffset: 0, bgBoost: 0 };
+    const fx = { yOffset: 0, xOffset: 0, rzOffset: 0, bgBoost: 0, bgCool: 0 };
     const fxTimelines = [];
 
     function runWinFX() {
@@ -141,6 +141,24 @@ const ThreeScene = ({ onOutcome }) => {
       tl.to(fatEdgeMat, { linewidth: 0.05, duration: 0.12, yoyo: true, repeat: 1, ease: 'power2.inOut', onUpdate: () => { fatEdgeMat.needsUpdate = true; } }, 0);
       // Background warmth boost (modulates idle alphas via bgBoost)
       tl.to(fx, { bgBoost: 1, duration: 0.3, yoyo: true, repeat: 1, ease: 'sine.inOut' }, 0);
+      tl.eventCallback('onComplete', () => {
+        const idx = fxTimelines.indexOf(tl);
+        if (idx >= 0) fxTimelines.splice(idx, 1);
+      });
+    }
+
+    function runLoseFX() {
+      const tl = gsap.timeline();
+      fxTimelines.push(tl);
+      // Jitter position X and rotation Z using offsets (so we don't fight the idle loop)
+      tl.to(fx, { xOffset: 0.05, duration: 0.06, yoyo: true, repeat: 5, ease: 'sine.inOut' }, 0)
+        .to(fx, { xOffset: 0, duration: 0.06, ease: 'sine.out' }, '>' );
+      tl.to(fx, { rzOffset: 0.15, duration: 0.06, yoyo: true, repeat: 5, ease: 'sine.inOut' }, 0)
+        .to(fx, { rzOffset: 0, duration: 0.06, ease: 'sine.out' }, '>' );
+      // Edge flicker (slight thickness changes)
+      tl.to(fatEdgeMat, { linewidth: 0.03, duration: 0.05, yoyo: true, repeat: 5, ease: 'power1.inOut', onUpdate: () => { fatEdgeMat.needsUpdate = true; } }, 0);
+      // Background dim/cool dip
+      tl.to(fx, { bgCool: 1, duration: 0.25, yoyo: true, repeat: 1, ease: 'sine.inOut' }, 0);
       tl.eventCallback('onComplete', () => {
         const idx = fxTimelines.indexOf(tl);
         if (idx >= 0) fxTimelines.splice(idx, 1);
@@ -212,14 +230,14 @@ const ThreeScene = ({ onOutcome }) => {
             }
           }
         }
-        const win = Math.random() < 1;
+        const win = Math.random() < 0.5;
         if (win) {
           // Win: only the clicked face flashes gold
           triggerFaceAnimation(faceMatIndex, GOLD);
           // Run celebratory GSAP FX (bounce, spin, edge bloom, bg warmth)
           runWinFX();
         } else {
-          // Lose: all faces flash red, and borders animate to red
+          // Lose: all faces flash red, and borders animate to black
           for (let i = 0; i < materials.length; i++) {
             triggerFaceAnimation(i, RED);
           }
@@ -229,6 +247,8 @@ const ThreeScene = ({ onOutcome }) => {
           edgeState.idleMix = 0; // leave idle; will ramp back when returning to idle
           edgeState.phase = 'fadeIn';
           edgeState.start = performance.now();
+          // Run glitch shake FX (position jitter, rotation jitter, edge flicker, bg dip)
+          runLoseFX();
         }
 
         if (typeof onOutcome === 'function') {
@@ -270,7 +290,8 @@ const ThreeScene = ({ onOutcome }) => {
       const floatY = Math.sin(et * (Math.PI * 2) / FLOAT_PERIOD) * FLOAT_AMPL;
       const rotZ = Math.sin(et * (Math.PI * 2) / ROT_PERIOD) * ROT_AMPL;
       container.position.y = floatY + fx.yOffset;
-      container.rotation.set(0, 0, rotZ);
+      container.position.x = fx.xOffset;
+      container.rotation.set(0, 0, rotZ + fx.rzOffset);
 
       // Shared pulse factor in [0,1] for edges + background
       const p = 0.5 + 0.5 * Math.sin(et * (Math.PI * 2) / PULSE_PERIOD);
@@ -291,8 +312,8 @@ const ThreeScene = ({ onOutcome }) => {
       // Background breathing via CSS variables
       {
         const rs = document.documentElement.style;
-        const a1 = Math.max(0, Math.min(1, BG_ALPHA1_BASE + BG_ALPHA1_DELTA * p + 0.18 * fx.bgBoost));
-        const a2 = Math.max(0, Math.min(1, BG_ALPHA2_BASE + BG_ALPHA2_DELTA * p + 0.12 * fx.bgBoost));
+        const a1 = Math.max(0, Math.min(1, BG_ALPHA1_BASE + BG_ALPHA1_DELTA * p + 0.18 * fx.bgBoost - 0.16 * fx.bgCool));
+        const a2 = Math.max(0, Math.min(1, BG_ALPHA2_BASE + BG_ALPHA2_DELTA * p + 0.12 * fx.bgBoost - 0.10 * fx.bgCool));
         rs.setProperty('--bg-alpha1', String(a1));
         rs.setProperty('--bg-alpha2', String(a2));
       }
