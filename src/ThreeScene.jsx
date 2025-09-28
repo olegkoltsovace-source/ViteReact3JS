@@ -3,6 +3,7 @@ import * as THREE from 'three';
 import { LineSegments2 } from 'three/examples/jsm/lines/LineSegments2.js';
 import { LineSegmentsGeometry } from 'three/examples/jsm/lines/LineSegmentsGeometry.js';
 import { LineMaterial } from 'three/examples/jsm/lines/LineMaterial.js';
+import { gsap } from 'gsap';
 
 const ThreeScene = ({ onOutcome }) => {
   const mountRef = useRef(null);
@@ -57,6 +58,94 @@ const ThreeScene = ({ onOutcome }) => {
     cube.add(fatEdges);
     // Slightly up-scale edge object to sit just above faces to avoid gaps at grazing angles
     fatEdges.scale.set(1.005, 1.005, 1.005);
+
+    // Particle system (golden burst on win)
+    const PARTICLE_COUNT = 300;
+    const particleGeom = new THREE.BufferGeometry();
+    const particlePositions = new Float32Array(PARTICLE_COUNT * 9);
+    particleGeom.setAttribute('position', new THREE.BufferAttribute(particlePositions, 3));
+    const particleMat = new THREE.PointsMaterial({
+      color: 0xFFD700,
+      size: 0.06,
+      sizeAttenuation: true,
+      transparent: true,
+      opacity: 0,
+      depthWrite: false,
+      blending: THREE.AdditiveBlending,
+    });
+    const particles = new THREE.Points(particleGeom, particleMat);
+    particles.visible = false;
+    particles.frustumCulled = false;
+    container.add(particles);
+    const velocities = new Float32Array(PARTICLE_COUNT * 3);
+    let particlesActive = false;
+    let particlesTL = null;
+
+    function spawnParticles() {
+      particles.position.copy(cube.position);
+      for (let i = 0; i < PARTICLE_COUNT; i++) {
+        const ix = i * 3;
+        // Place particles on a spherical shell around the cube to form a halo
+        let x = Math.random() * 2 - 1;
+        let y = Math.random() * 2 - 1;
+        let z = Math.random() * 2 - 1;
+        let len = Math.hypot(x, y, z) || 1;
+        x /= len; y /= len; z /= len;
+        const R = 0.55; // shell radius just outside the cube
+        particlePositions[ix + 0] = x * R;
+        particlePositions[ix + 1] = y * R;
+        particlePositions[ix + 2] = z * R;
+        // Radial outward velocity with a slight tangential swirl to read as a "halo"
+        const speed = 1.2 + Math.random() * 0.8;
+        // Tangent in XY plane (perpendicular to radial projection) for swirl
+        let px = x, py = y;
+        let plen = Math.hypot(px, py);
+        if (plen < 1e-3) { px = 1; py = 0; plen = 1; }
+        const tx = -py / plen;
+        const ty = px / plen;
+        const swirl = 0.3 + Math.random() * 0.3; // 0.3..0.6 tangential component
+        velocities[ix + 0] = x * speed + tx * swirl;
+        velocities[ix + 1] = y * speed + ty * swirl;
+        velocities[ix + 2] = z * speed;
+      }
+      particleGeom.attributes.position.needsUpdate = true;
+      particles.visible = true;
+      particleMat.opacity = 1;
+      particlesActive = true;
+      if (particlesTL) particlesTL.kill();
+      particlesTL = gsap.to(particleMat, {
+        opacity: 0,
+        duration: 0.9,
+        ease: 'power2.out',
+        onComplete: () => {
+          particles.visible = false;
+          particlesActive = false;
+        }
+      });
+    }
+
+    // GSAP-based FX helpers and state (for win effects)
+    const fx = { yOffset: 0, bgBoost: 0 };
+    const fxTimelines = [];
+
+    function runWinFX() {
+      spawnParticles();
+      const tl = gsap.timeline();
+      fxTimelines.push(tl);
+      // Container bounce (additive to idle float via yOffset)
+      tl.to(fx, { yOffset: 0.18, duration: 0.18, ease: 'power2.out' })
+        .to(fx, { yOffset: 0, duration: 0.38, ease: 'bounce.out' }, '>-0.02');
+      // Quick full spin on cube (stacks with continuous rotation)
+      tl.to(cube.rotation, { y: cube.rotation.y + Math.PI * 2, duration: 0.8, ease: 'power4.out' }, 0);
+      // Edge bloom pulse (temporarily thicker)
+      tl.to(fatEdgeMat, { linewidth: 0.05, duration: 0.12, yoyo: true, repeat: 1, ease: 'power2.inOut', onUpdate: () => { fatEdgeMat.needsUpdate = true; } }, 0);
+      // Background warmth boost (modulates idle alphas via bgBoost)
+      tl.to(fx, { bgBoost: 1, duration: 0.3, yoyo: true, repeat: 1, ease: 'sine.inOut' }, 0);
+      tl.eventCallback('onComplete', () => {
+        const idx = fxTimelines.indexOf(tl);
+        if (idx >= 0) fxTimelines.splice(idx, 1);
+      });
+    }
 
     // Click detection with raycaster
     const raycaster = new THREE.Raycaster();
@@ -123,10 +212,12 @@ const ThreeScene = ({ onOutcome }) => {
             }
           }
         }
-        const win = Math.random() < 0.5;
+        const win = Math.random() < 1;
         if (win) {
           // Win: only the clicked face flashes gold
           triggerFaceAnimation(faceMatIndex, GOLD);
+          // Run celebratory GSAP FX (bounce, spin, edge bloom, bg warmth)
+          runWinFX();
         } else {
           // Lose: all faces flash red, and borders animate to red
           for (let i = 0; i < materials.length; i++) {
@@ -178,7 +269,7 @@ const ThreeScene = ({ onOutcome }) => {
       const et = clock.getElapsedTime();
       const floatY = Math.sin(et * (Math.PI * 2) / FLOAT_PERIOD) * FLOAT_AMPL;
       const rotZ = Math.sin(et * (Math.PI * 2) / ROT_PERIOD) * ROT_AMPL;
-      container.position.y = floatY;
+      container.position.y = floatY + fx.yOffset;
       container.rotation.set(0, 0, rotZ);
 
       // Shared pulse factor in [0,1] for edges + background
@@ -200,8 +291,33 @@ const ThreeScene = ({ onOutcome }) => {
       // Background breathing via CSS variables
       {
         const rs = document.documentElement.style;
-        rs.setProperty('--bg-alpha1', String(BG_ALPHA1_BASE + BG_ALPHA1_DELTA * p));
-        rs.setProperty('--bg-alpha2', String(BG_ALPHA2_BASE + BG_ALPHA2_DELTA * p));
+        const a1 = Math.max(0, Math.min(1, BG_ALPHA1_BASE + BG_ALPHA1_DELTA * p + 0.18 * fx.bgBoost));
+        const a2 = Math.max(0, Math.min(1, BG_ALPHA2_BASE + BG_ALPHA2_DELTA * p + 0.12 * fx.bgBoost));
+        rs.setProperty('--bg-alpha1', String(a1));
+        rs.setProperty('--bg-alpha2', String(a2));
+      }
+
+      // Update particle burst positions
+      if (particlesActive) {
+        const posAttr = particleGeom.attributes.position;
+        for (let i = 0; i < PARTICLE_COUNT; i++) {
+          const ix = i * 3;
+          // no gravity for halo burst (keep radial expansion uniform)
+          // velocities[ix + 1] += 0;
+          // integrate
+          posAttr.array[ix + 0] += velocities[ix + 0] * dtSec;
+          posAttr.array[ix + 1] += velocities[ix + 1] * dtSec;
+          posAttr.array[ix + 2] += velocities[ix + 2] * dtSec;
+          // damping
+          velocities[ix + 0] *= 0.96;
+          velocities[ix + 1] *= 0.96;
+          velocities[ix + 2] *= 0.96;
+        }
+        posAttr.needsUpdate = true;
+        if (particleMat.opacity <= 0.01) {
+          particles.visible = false;
+          particlesActive = false;
+        }
       }
 
       // Update per-face color animations
@@ -293,6 +409,9 @@ const ThreeScene = ({ onOutcome }) => {
 
     return () => {
       cancelAnimationFrame(frameId);
+      // Kill any running GSAP timelines
+      fxTimelines.forEach(tl => tl.kill());
+      if (particlesTL) particlesTL.kill();
       renderer.domElement.removeEventListener('click', onClick);
       window.removeEventListener('resize', handleResize);
       renderer.dispose();
@@ -304,6 +423,8 @@ const ThreeScene = ({ onOutcome }) => {
       edgesGeom.dispose();
       fatEdgeGeo.dispose();
       fatEdgeMat.dispose();
+      particleGeom.dispose();
+      particleMat.dispose();
       materials.forEach(m => m.dispose());
       // fatEdges is removed with scene teardown; material/geometry disposed above
     };
