@@ -7,6 +7,9 @@ import { gsap } from 'gsap';
 
 const ThreeScene = ({ onOutcome }) => {
   const mountRef = useRef(null);
+  // Keep latest onOutcome without re-initializing the whole scene
+  const outcomeRef = useRef(onOutcome);
+  useEffect(() => { outcomeRef.current = onOutcome; }, [onOutcome]);
 
   useEffect(() => {
     const getSize = () => [mountRef.current.clientWidth, mountRef.current.clientHeight];
@@ -165,6 +168,9 @@ const ThreeScene = ({ onOutcome }) => {
     }
 
     F.forEach(placePips);
+
+    // Win probability per face value (higher RTP for low pip counts, lower for high)
+    const WIN_PROB = { 1: 0.95, 2: 0.90, 3: 0.70, 4: 0.60, 5: 0.25, 6: 0.20 };
 
     // Particle system (golden burst on win)
     const PARTICLE_COUNT = 300;
@@ -383,7 +389,10 @@ const ThreeScene = ({ onOutcome }) => {
             }
           }
         }
-        const win = Math.random() < 0.5;
+        // Determine pip value for this face and its win probability
+        const pipVal = (F[faceMatIndex] && F[faceMatIndex].val) || 1;
+        const chance = WIN_PROB[pipVal] ?? 0.5;
+        const win = Math.random() < chance;
         if (win) {
           // Win: only the clicked face flashes gold
           triggerFaceAnimation(faceMatIndex, GOLD);
@@ -404,8 +413,9 @@ const ThreeScene = ({ onOutcome }) => {
           runLoseFX();
         }
 
-        if (typeof onOutcome === 'function') {
-          onOutcome(win ? 'win' : 'lose');
+        const cb = outcomeRef.current;
+        if (typeof cb === 'function') {
+          cb({ result: win ? 'win' : 'lose', multiplier: win ? pipVal : 0, face: pipVal });
         }
       }
     }
